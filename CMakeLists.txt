@@ -43,6 +43,6 @@ message("OPENSCENEGRAPH_INCLUDE_DIRS: ${OPENSCENEGRAPH_INCLUDE_DIRS}")
 include_directories(${OPENSCENEGRAPH_INCLUDE_DIRS})
 
 # src
-add_subdirectory(src)
+add_subdirectory(src/osgsatellite)
 
 
