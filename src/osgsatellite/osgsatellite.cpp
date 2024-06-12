@@ -5,6 +5,7 @@
 #include <fstream>
 #include <string>
 #include <sstream>
+#include <algorithm>
 
 #include <osgViewer/Viewer>
 #include <osg/Group>
@@ -29,7 +30,12 @@
 #include <osg/NodeVisitor>
 #include <osg/Drawable>
 #include <osg/LineWidth>
+#include <osg/Light>
+#include <osg/LightSource>
+#include <osg/LOD>
 #include <osgViewer/ViewerEventHandlers>
+//#include <osgQt/GraphicsWindowQt>
+
 
 // exposure time 1s, d_length 1 mm^2
 const double g_CCDphotons = 19100;
@@ -152,12 +158,44 @@ double irradianceToApparentMagnitude(const double e)
     double m = 2.5 * std::log10(g_E_sun / e) + g_sun_app_mag;
     return m;
 }
+osg::Vec4 computePixelSizeVector(const osg::Viewport& W, const osg::Matrix& P, const osg::Matrix& M)
+{
+    // pre adjust P00,P20,P23,P33 by multiplying them by the viewport window matrix.
+    // here we do it in short hand with the knowledge of how the window matrix is formed
+    // note P23,P33 are multiplied by an implicit 1 which would come from the window matrix.
+    // Robert Osfield, June 2002.
 
+    // scaling for horizontal pixels
+    float P00 = P(0, 0) * W.width() * 0.5f;
+    float P20_00 = P(2, 0) * W.width() * 0.5f + P(2, 3) * W.width() * 0.5f;
+    osg::Vec3 scale_00(M(0, 0) * P00 + M(0, 2) * P20_00,
+        M(1, 0) * P00 + M(1, 2) * P20_00,
+        M(2, 0) * P00 + M(2, 2) * P20_00);
+
+    // scaling for vertical pixels
+    float P10 = P(1, 1) * W.height() * 0.5f;
+    float P20_10 = P(2, 1) * W.height() * 0.5f + P(2, 3) * W.height() * 0.5f;
+    osg::Vec3 scale_10(M(0, 1) * P10 + M(0, 2) * P20_10,
+        M(1, 1) * P10 + M(1, 2) * P20_10,
+        M(2, 1) * P10 + M(2, 2) * P20_10);
+
+    float P23 = P(2, 3);
+    float P33 = P(3, 3);
+    osg::Vec4 pixelSizeVector(M(0, 2) * P23,
+        M(1, 2) * P23,
+        M(2, 2) * P23,
+        M(3, 2) * P23 + M(3, 3) * P33);
+
+    float scaleRatio = 0.7071067811f / sqrtf(scale_00.length2() + scale_10.length2());
+    pixelSizeVector *= scaleRatio;
+
+    return pixelSizeVector;
+}
 class DistanceUpdateCallback : public osg::Drawable::UpdateCallback
 {
 public:
-    DistanceUpdateCallback(osg::Camera* camera, osg::Geometry* geo, osg::Texture2D* tex)
-        : m_camera(camera), m_geo(geo) , m_tex(tex), m_psfImage(nullptr)
+    DistanceUpdateCallback(osg::Camera* camera, osg::Light* light, osg::Geometry* geo, osg::Texture2D* tex)
+        : m_camera(camera), m_light(light), m_geo(geo) , m_tex(tex), m_psfImage(nullptr)
     {
         osg::Object* imageObj = m_tex->getImage()->clone(osg::CopyOp::DEEP_COPY_IMAGES);
         osg::Image* image = dynamic_cast<osg::Image*>(imageObj);
@@ -176,25 +214,36 @@ public:
             std::cout << "Moving!" << std::endl;
             double distance = curMatrix.getTrans().length();
             std::cout << "distance: " << distance << std::endl;
+            if (distance < 10000)
+            {
+                double max = 7438980;
+                double min = 3505390;
+                double range = max - min;
+                double factor = range / 7000;
+                distance = min + factor * (10000-distance);
+            }
             updateDarkPoint(distance);
         }
         m_lastViewMatrix = curMatrix;
         
     }
 private:
-    double computeCosineOfAngle(const osg::Vec3& a, const osg::Vec3& b)
+    float computeCosineOfAngle(const osg::Vec3f& a, const osg::Vec3f& b)
     {
-        // Compute dot product of the vectors
-        double dotProduct = a * b;
+        osg::Vec3f vectorA = a;
+        osg::Vec3f vectorB = b;
 
-        // Compute magnitudes of the vectors
-        double magnitudeA = a.length();
-        double magnitudeB = b.length();
+        // Normalize the vectors
+        vectorA.normalize();
+        vectorB.normalize();
 
-        // Compute cosine of the angle between the vectors
-        double cosine = dotProduct / (magnitudeA * magnitudeB);
+        // Calculate the dot product
+        float dotProduct = vectorA * vectorB; // Using operator* for dot product
 
-        return cosine;
+        // Clamp the dot product within the valid range for acos
+
+        dotProduct = osg::clampTo(dotProduct, -1.0f, 1.0f);
+        return dotProduct;
     }
     osg::Vec3d getCameraWorldPosition(osg::Camera* camera)
     {
@@ -207,22 +256,33 @@ private:
 
         return cameraWorldPosition;
     }
+    void printAngle(const float cosin)
+    {
+        // Calculate the angle in radians
+        float angleRadians = std::acos(cosin);
+
+        // Convert the angle to degrees (optional)
+        float angleDegrees = osg::RadiansToDegrees(angleRadians);
+
+        // Output the results
+        std::cout << "Angle between vectors: " << angleRadians << " radians (" << angleDegrees << " degrees)" << std::endl;
+    }
     double computeERA()
     {
         double era = 0.0;
         // pos of sun
-        osg::Vec3d sunPos(0.0, 1.0, 0.0);
+        osg::Vec3d sunPos = osg::Vec3d(m_light->getPosition().x(), m_light->getPosition().y(), m_light->getPosition().z());
         // pos of cam
         osg::Vec3d camPos = getCameraWorldPosition(m_camera);
         std::cout << "current Cam Pos: (" << camPos.x() << ", " << camPos.y() << ", " << camPos.z() << ")" << std::endl;
         camPos.normalize();
         std::vector<osg::Vec3d> vec;
-        osg::Vec3d topN(0.0, 1.0, 0.0);
-        osg::Vec3d bottomN(0.0, -1.0, 0.0);
+        osg::Vec3d topN(0.0, 0.0, 1.0);
+        osg::Vec3d bottomN(0.0, 0.0, -1.0);
         osg::Vec3d leftN(-1.0, 0.0, 0.0);
         osg::Vec3d rightN(1.0, 0.0, 0.0);
-        osg::Vec3d frontN(0.0, 0.0, 1.0);
-        osg::Vec3d backN(0.0, 0.0, -1.0);
+        osg::Vec3d frontN(0.0, -1.0, 0.0);
+        osg::Vec3d backN(0.0, 1.0, 0.0);
         vec.push_back(topN);
         vec.push_back(bottomN);
         vec.push_back(leftN);
@@ -236,10 +296,15 @@ private:
         for (int i = 0; i < vec.size(); ++i)
         {
             osg::Vec3d normal = vec.at(i);
+           
+            std::cout << "current Sun Pos: " << sunPos.x() << ", " << sunPos.y() << ", " << sunPos.z() << std::endl;
             std::cout << "currentNormal:( " << normal.x() << ", " << normal.y() << ", " << normal.z() << ")" << std::endl;
             double cos1i = computeCosineOfAngle(camPos, normal);
-            double cos2i = computeCosineOfAngle(sunPos, normal);
-            std::cout << "cos1i: " << cos1i << ", cos2i: " << cos2i << std::endl;
+            std::cout << "cos1i: " << cos1i << std::endl;
+            printAngle(cos1i);
+            double cos2i = computeCosineOfAngle(osg::Vec3d(sunPos.x(), sunPos.y(), sunPos.z()), normal);
+            std::cout << "cos2i: " << cos2i << std::endl;
+            printAngle(cos2i);
             double area = planeArea *  cos1i * cos2i;
             std::cout << "area(" << i << "): " << area << std::endl;
             if (area > 0)
@@ -260,8 +325,7 @@ private:
 
     void updateDarkPoint(double distance)
     {
-        computeERA();
-        double E = computeIrradianceOfSatellite(distance, g_rho, 0.800);
+        double E = computeIrradianceOfSatellite(distance, g_rho, computeERA());
         double target_mag = irradianceToApparentMagnitude(E);
         double d_len = 0.03; // unit m
         double t_exposure = 5;    // unit s
@@ -290,6 +354,7 @@ private:
     };
 protected:
     osg::ref_ptr<osg::Camera> m_camera;
+    osg::ref_ptr<osg::Light> m_light;
     osg::ref_ptr<osg::Geometry> m_geo;
     osg::ref_ptr<osg::Texture2D> m_tex;
     osg::ref_ptr<osg::Image> m_psfImage;    // the origional PSF image
@@ -371,14 +436,14 @@ int main()
     osg::ref_ptr<osg::Group> SatelliteGroup = new osg::Group;// 前(x)右(y)下(z)，转序就是zyx(321)
     osg::ref_ptr<osg::Node> axesNode = osgDB::readNodeFile("axes.osgt");//createCoordinateAxes();
     axesNode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
-    osg::ref_ptr<osg::MatrixTransform> mtScaleNode = new osg::MatrixTransform;
-    mtScaleNode->setMatrix(osg::Matrix::scale(10, 10, 10));
-    mtScaleNode->addChild(axesNode);
+    osg::ref_ptr<osg::MatrixTransform> axesScaleMt = new osg::MatrixTransform;
+    axesScaleMt->setMatrix(osg::Matrix::scale(10, 10, 10));
+    axesScaleMt->addChild(axesNode);
 
     osg::ref_ptr<osg::MatrixTransform> satellitePosMt = new osg::MatrixTransform;
     satellitePosMt->addChild(osgDB::readNodeFile("GPS.ive"));
     SatelliteGroup->addChild(satellitePosMt.get());
-    SatelliteGroup->addChild(mtScaleNode.get());
+    //SatelliteGroup->addChild(axesScaleMt.get()); // add axesScaleMt to scene graph
 
     osg::ref_ptr<osg::Geode> satellitePointGeode = new osg::Geode();
     osg::ref_ptr<osg::Geometry> geom = new osg::Geometry();
@@ -422,13 +487,37 @@ int main()
     // Enable point size attribute
     osg::ref_ptr<osg::Point> pointAttrib = new osg::Point;
     pointAttrib->setSize(12.0); // Set the size of the point
-    geom->getOrCreateStateSet()->setAttributeAndModes(pointAttrib.get());
-    geom->setUpdateCallback(new DistanceUpdateCallback(viewer->getCamera(), geom.get(), PSFTex.get()));
+    geom->getOrCreateStateSet()->setAttributeAndModes(pointAttrib.get()); 
+    
+    viewer->getLight()->setPosition(osg::Vec4(0.0, 0.0, 1.0,0.0));
+    viewer->getLight()->setDirection(osg::Vec3(0.0, 0.0, -1.0));
+    geom->setUpdateCallback(new DistanceUpdateCallback(viewer->getCamera(), viewer->getLight(),geom.get(), PSFTex.get()));
     satellitePointGeode->addDrawable(geom.get());
     satellitePointGeode->getOrCreateStateSet()->setRenderBinDetails(1, "RenderBin");
     satellitePointGeode->getOrCreateStateSet()->setAttributeAndModes(new osg::Depth(), osg::StateAttribute::OFF);
     satellitePointGeode->getOrCreateStateSet()->setAttributeAndModes(new osg::Light(), osg::StateAttribute::OFF);
-    satellitePosMt->addChild(satellitePointGeode.get());
+    osg::ref_ptr<osg::LOD> pointLOD = new osg::LOD;
+    pointLOD->addChild(satellitePointGeode.get(), 3000, 100000000);
+    //satellitePosMt->addChild(satellitePointGeode.get());
+    satellitePosMt->addChild(pointLOD.get());
+
+    // Sun
+    // Create a sphere to represent the sun
+    osg::ref_ptr<osg::Sphere> sunShape = new osg::Sphere(osg::Vec3(0, 0, 0), 30.0f); // Center at origin, radius 1.0
+    osg::ref_ptr<osg::ShapeDrawable> sunDrawable = new osg::ShapeDrawable(sunShape);
+
+    // Optionally, set the color of the sun
+    sunDrawable->setColor(osg::Vec4(1.0f, 1.0f, 0.0f, 1.0f)); // Bright yellow color
+
+    // Create a geode to hold the drawable
+    osg::ref_ptr<osg::Geode> sunGeode = new osg::Geode();
+    sunGeode->addDrawable(sunDrawable.get());
+
+    osg::ref_ptr<osg::MatrixTransform> sunMt = new osg::MatrixTransform;
+    sunMt->setMatrix(osg::Matrix::translate(0.0f, 0.0f, 100.0f));
+    sunMt->addChild(sunGeode.get());
+    
+    //rootGroup->addChild(sunMt.get()); // add Sun to scene graph
     rootGroup->addChild(SatelliteGroup.get());
     viewer->setSceneData(rootGroup.get());
     viewer->addEventHandler(new osgViewer::StatsHandler());
@@ -436,6 +525,37 @@ int main()
     viewer->getCamera()->getProjectionMatrixAsPerspective(fovy, aspectRatio, zNear, zFar);
     viewer->getCamera()->setCullingMode(osg::CullSettings::NO_CULLING);
     viewer->getCamera()->setProjectionMatrixAsPerspective(fovy, aspectRatio, zNear, 100000);
+
+    // Define the traits for the small window.
+    osg::ref_ptr<osg::GraphicsContext::Traits> traits = new osg::GraphicsContext::Traits();
+    traits->x = 100;           // Window position x
+    traits->y = 100;           // Window position y
+    traits->width = 800;       // Window width
+    traits->height = 600;      // Window height
+    traits->windowDecoration = true; // Enable window decorations (title bar, borders)
+    traits->doubleBuffer = true;  // Enable double buffering
+
+    // Create a graphics context based on the defined traits.
+    osg::ref_ptr<osg::GraphicsContext> gc = osg::GraphicsContext::createGraphicsContext(traits.get());
+
+    if (!gc)
+    {
+        std::cerr << "Failed to create graphics context." << std::endl;
+        return 1;
+    }
+
+    // Set up the camera for the viewer.
+    osg::Camera* camera = viewer->getCamera();
+    camera->setGraphicsContext(gc.get());
+    camera->setViewport(new osg::Viewport(0, 0, traits->width, traits->height));
+
+    // Set the clear color for the window.
+    camera->setClearColor(osg::Vec4(0.2f, 0.2f, 0.2f, 1.0f));
+
+    // Set up projection matrix.
+    camera->setProjectionMatrixAsPerspective(
+        30.0f, static_cast<double>(traits->width) / static_cast<double>(traits->height), 1.0f, 100000.0f);
+
     return viewer->run();
 }
 

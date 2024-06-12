@@ -21,8 +21,8 @@ void main()
     float temp = texture(tex, gl_PointCoord).x;
     //temp = n_pe * temp / n_e / 256.0; 
     gl_FragColor = vec4(temp, temp, temp, 1.0);
-    // if (temp < 0.02)
-    // {
-    //     gl_FragColor.a = 0.0;
-    // }
+    if (temp < 0.2)
+    {
+        gl_FragColor.a = 0.0;
+    }
 }
