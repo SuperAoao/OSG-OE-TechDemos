@@ -16,8 +16,8 @@ ${PROJECT_SOURCE_DIR}/src/public_shader/pbr.fs
 )
 
 set(SHADER_SRC
-satellitepoint.vs
-satellitepoint.fs
+${PROJECT_SOURCE_DIR}/src/osg_satellite/shaders/satellitepoint.vs
+${PROJECT_SOURCE_DIR}/src/osg_satellite/shaders/satellitepoint.fs
 )
 
 source_group("Common Files" FILES ${COMMON_SRC})
@@ -29,7 +29,7 @@ source_group("Shader Files" FILES ${SHADER_SRC})
 
 include_directories(${PROJECT_SOURCE_DIR}/src/public_header)
 
-add_executable(${MY_TARGET_NAME} osgsatellite.cpp ${COMMON_SRC} ${COMMON_SHADER_SRC} ${SHADER_SRC})
+add_executable(${MY_TARGET_NAME} osgsatellite.cpp starimgsimutils.h starimgsimutils.cpp ${COMMON_SRC} ${COMMON_SHADER_SRC} ${SHADER_SRC})
 
 target_link_libraries(${MY_TARGET_NAME} ${OPENSCENEGRAPH_LIBRARIES})
 
