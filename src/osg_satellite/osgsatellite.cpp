@@ -1,6 +1,7 @@
 ﻿/*
 *	This demo is a satellite image simulator
 */
+#include "helper.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -34,7 +35,7 @@
 #include <osg/LightSource>
 #include <osg/LOD>
 #include <osgViewer/ViewerEventHandlers>
-//#include <osgQt/GraphicsWindowQt>
+
 
 
 // exposure time 1s, d_length 1 mm^2
@@ -47,21 +48,6 @@ const double g_rho = 0.25; // effective reflectance
 const double n_ec = 45000;    // CCD per pixel max photons
 const double n_e = n_ec / 256;    // photons per gray scale
 
-
-std::string readShaderFile(const std::string& filePath) {
-    std::ifstream shaderFile(filePath);
-    std::stringstream shaderStream;
-
-    if (shaderFile.is_open()) {
-        shaderStream << shaderFile.rdbuf();
-        shaderFile.close();
-        return shaderStream.str();
-    }
-    else {
-        std::cerr << "Failed to open shader file: " << filePath << std::endl;
-        return "";
-    }
-}
 
 // we consider center point (xc,yc) = (0,0)
 double simplifiedGaussianFunc(const double x, const double y, const double xc, const double yc, const double sigma)
@@ -465,8 +451,8 @@ int main()
     // Set up the shader program
     osg::ref_ptr<osg::Program> program = new osg::Program;
     
-    program->addShader(new osg::Shader(osg::Shader::VERTEX, readShaderFile("D:\\DevGitHub\\OSG-OE-TechDemos\\src\\osgsatellite\\satellitepoint.vs").c_str())); // Load the vertex shader
-    program->addShader(new osg::Shader(osg::Shader::FRAGMENT, readShaderFile("D:\\DevGitHub\\OSG-OE-TechDemos\\src\\osgsatellite\\satellitepoint.fs").c_str())); // Load the fragment shader
+    program->addShader(new osg::Shader(osg::Shader::VERTEX, Helper::readShaderFile("D:\\DevGitHub\\OSG-OE-TechDemos\\src\\osgsatellite\\satellitepoint.vs").c_str())); // Load the vertex shader
+    program->addShader(new osg::Shader(osg::Shader::FRAGMENT, Helper::readShaderFile("D:\\DevGitHub\\OSG-OE-TechDemos\\src\\osgsatellite\\satellitepoint.fs").c_str())); // Load the fragment shader
 
     // Attach the shader program to the geometry
     geom->getOrCreateStateSet()->setAttributeAndModes(program.get());
